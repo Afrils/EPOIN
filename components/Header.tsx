@@ -20,6 +20,7 @@ const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onLogout, prof
     
   const appName = profile?.app_name || 'Sistem Poin Siswa';
   const logoUrl = profile?.logo_url;
+  const userRole = profile?.role;
 
   return (
     <header className="bg-white shadow-sm sticky top-0 z-20">
@@ -30,27 +31,34 @@ const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onLogout, prof
           ) : (
             <TrophyIcon className="h-8 w-8 text-blue-600" />
           )}
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate" title={appName}>
-            {appName}
-          </h1>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:gap-3">
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate" title={appName}>
+                {appName}
+            </h1>
+            {userRole && <span className="text-xs font-semibold bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full capitalize">{userRole === 'teacher' ? 'Guru' : userRole}</span>}
+          </div>
         </div>
         <nav className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:space-x-1">
           <button onClick={() => onNavigate('students')} className={navButtonClasses('students')} title="Daftar Siswa">
             <UserGroupIcon className="h-5 w-5 sm:mr-2" />
             <span className="hidden sm:inline">Daftar Siswa</span>
           </button>
-          <button onClick={() => onNavigate('rules')} className={navButtonClasses('rules')} title="Manajemen Peraturan">
-            <ShieldCheckIcon className="h-5 w-5 sm:mr-2" />
-            <span className="hidden sm:inline">Peraturan</span>
-          </button>
-          <button onClick={() => onNavigate('data')} className={navButtonClasses('data')} title="Ekspor/Impor Data">
-            <DatabaseIcon className="h-5 w-5 sm:mr-2" />
-            <span className="hidden sm:inline">Data</span>
-          </button>
-          <button onClick={() => onNavigate('settings')} className={navButtonClasses('settings')} title="Pengaturan Aplikasi">
-            <CogIcon className="h-5 w-5 sm:mr-2" />
-            <span className="hidden sm:inline">Pengaturan</span>
-          </button>
+          {userRole === 'admin' && (
+            <>
+              <button onClick={() => onNavigate('rules')} className={navButtonClasses('rules')} title="Manajemen Peraturan">
+                <ShieldCheckIcon className="h-5 w-5 sm:mr-2" />
+                <span className="hidden sm:inline">Peraturan</span>
+              </button>
+              <button onClick={() => onNavigate('data')} className={navButtonClasses('data')} title="Ekspor/Impor Data">
+                <DatabaseIcon className="h-5 w-5 sm:mr-2" />
+                <span className="hidden sm:inline">Data</span>
+              </button>
+              <button onClick={() => onNavigate('settings')} className={navButtonClasses('settings')} title="Pengaturan Aplikasi">
+                <CogIcon className="h-5 w-5 sm:mr-2" />
+                <span className="hidden sm:inline">Pengaturan</span>
+              </button>
+            </>
+          )}
            <button onClick={onLogout} className="flex items-center justify-center sm:justify-start px-3 py-2 text-sm font-medium rounded-md transition-colors text-gray-600 hover:bg-red-100 hover:text-red-700 w-full sm:w-auto" title="Keluar">
             <LogOutIcon className="h-5 w-5 sm:mr-2" />
             <span className="hidden sm:inline">Keluar</span>

@@ -12,7 +12,9 @@ import GroupPointModal from './components/GroupPointModal';
 import { Auth } from '@supabase/auth-ui-react';
 import { ThemeSupa } from '@supabase/auth-ui-shared';
 import type { Session } from '@supabase/supabase-js';
-
+import StudentEditModal from './components/StudentEditModal';
+import SettingsView from './components/SettingsView';
+import DataManagementView from './components/DataManagementView';
 
 type SortByType = 'points-desc' | 'points-asc' | 'name-asc' | 'name-desc';
 
@@ -30,16 +32,21 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>('students');
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingStudent, setIsAddingStudent] = useState(false);
+  const [isUpdatingStudent, setIsUpdatingStudent] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [isSubmittingGroupPoints, setIsSubmittingGroupPoints] = useState(false);
 
+  // State for student edit modal
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      setIsLoading(false);
+      if(!session) setIsLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -49,10 +56,13 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []);
 
-
   useEffect(() => {
     if (!session) {
+      setStudents([]);
+      setRules([]);
+      setProfile(null);
       setFetchError(null);
+      setCurrentView('students');
       return;
     };
     
@@ -61,118 +71,209 @@ const App: React.FC = () => {
         setFetchError(null);
         try {
             const [studentsResponse, rulesResponse, profileResponse] = await Promise.all([
-                supabase.from('students').select('*').eq('user_id', session.user.id),
-                supabase.from('rules').select('*').eq('user_id', session.user.id),
+                supabase.from('students').select('*'),
+                supabase.from('rules').select('*'),
                 supabase.from('profiles').select('*').eq('id', session.user.id).single()
             ]);
 
             if (studentsResponse.error) throw studentsResponse.error;
             if (rulesResponse.error) throw rulesResponse.error;
-            if (profileResponse.error && profileResponse.error.code !== 'PGRST116') { // Ignore 'Range not satisfactory' for empty profiles
+            
+            let userProfile = profileResponse.data;
+
+            if (profileResponse.error && profileResponse.error.code === 'PGRST116') {
+                 const newProfileData: Database['public']['Tables']['profiles']['Insert'] = { id: session.user.id, role: 'teacher', app_name: 'Sistem Poin Siswa' };
+                 const { data: newProfile, error: insertError } = await supabase
+                    .from('profiles')
+                    .insert(newProfileData)
+                    .select()
+                    .single();
+                if (insertError) throw insertError;
+                if (newProfile) {
+                  userProfile = newProfile;
+                }
+            } else if (profileResponse.error) {
                 throw profileResponse.error;
             }
 
-            const studentsData = (studentsResponse.data || []).map(s => ({
-                ...s,
-                photo_url: s.photo_url || ''
-            }));
-            const profileData = profileResponse.data ? {
-                ...profileResponse.data,
-                app_name: profileResponse.data.app_name || '',
-                logo_url: profileResponse.data.logo_url || '',
-                favicon_url: profileResponse.data.favicon_url || '',
-            } : null;
-
-            setStudents(studentsData);
+            setStudents(studentsResponse.data || []);
             setRules(rulesResponse.data || []);
-            setProfile(profileData);
+            setProfile(userProfile);
+            updateAppAppearance(userProfile);
 
         } catch (error: any) {
-            console.error("Error fetching initial data:", error);
-            setFetchError(error.message);
+            setFetchError(`Gagal memuat data: ${error.message}`);
         } finally {
             setIsLoading(false);
         }
     };
+
     fetchData();
   }, [session]);
   
-  useEffect(() => {
-    if (profile) {
-        document.title = profile.app_name || 'Sistem Poin Siswa';
-        const favicon = document.getElementById('favicon') as HTMLLinkElement | null;
-        if (favicon) {
-            favicon.href = profile.favicon_url || '/vite.svg';
-        }
-    }
-  }, [profile]);
-
-
-  const filteredStudents = useMemo(() => {
-    return students
-        .filter(student => student.name.toLowerCase().includes(searchTerm.toLowerCase()))
-        .sort((a, b) => {
-            switch (sortBy) {
-                case 'points-asc':
-                    return a.points - b.points;
-                case 'name-asc':
-                    return a.name.localeCompare(b.name);
-                case 'name-desc':
-                    return b.name.localeCompare(a.name);
-                case 'points-desc':
-                default:
-                    return b.points - a.points;
-            }
-        });
-  }, [students, searchTerm, sortBy]);
+  const updateAppAppearance = (profileData: Profile | null) => {
+      if (!profileData) return;
+      document.title = profileData.app_name || 'Sistem Poin Siswa';
+      const favicon = document.getElementById('favicon') as HTMLLinkElement;
+      if (favicon && profileData.favicon_url) {
+          favicon.href = profileData.favicon_url;
+      }
+  };
   
-  const handleToggleSelection = (studentId: string) => {
-    setSelectedStudentIds(prev => {
-        const newSet = new Set(prev);
-        if (newSet.has(studentId)) {
-            newSet.delete(studentId);
-        } else {
-            newSet.add(studentId);
-        }
-        return newSet;
-    });
+  // CRUD Handlers for Rules
+  const handleAddRule = async (ruleData: Omit<Rule, 'id' | 'created_at' | 'user_id'>) => {
+      if (!session) return;
+      const newRule: Database['public']['Tables']['rules']['Insert'] = { ...ruleData, user_id: session.user.id };
+      const { data, error } = await supabase
+        .from('rules')
+        .insert(newRule)
+        .select()
+        .single();
+      if (error) {
+          console.error('Error adding rule:', error);
+      } else if (data) {
+          setRules([...rules, data]);
+      }
   };
 
-  const handleSelectAll = () => {
-    const allFilteredIds = filteredStudents.map(s => s.id);
-    setSelectedStudentIds(new Set(allFilteredIds));
+  const handleUpdateRule = async (ruleData: Rule) => {
+      const updatePayload: Database['public']['Tables']['rules']['Update'] = {
+        description: ruleData.description,
+        points: ruleData.points,
+        type: ruleData.type,
+      };
+      const { data, error } = await supabase
+        .from('rules')
+        .update(updatePayload)
+        .eq('id', ruleData.id)
+        .select()
+        .single();
+      if (error) {
+          console.error('Error updating rule:', error);
+      } else if (data) {
+          setRules(rules.map(r => r.id === data.id ? data : r));
+      }
   };
 
-  const handleClearSelection = () => {
-      setSelectedStudentIds(new Set());
+  const handleDeleteRule = async (ruleId: string) => {
+      const { error } = await supabase.from('rules').delete().eq('id', ruleId);
+      if (error) {
+          console.error('Error deleting rule:', error);
+      } else {
+          setRules(rules.filter(r => r.id !== ruleId));
+      }
   };
 
+  // Student CRUD handlers
   const handleAddStudent = async (name: string, photo: File | null) => {
     if (!session) return;
     setIsAddingStudent(true);
-    try {
-        let photoUrl: string | null = null;
-        if (photo) {
-            const fileName = `${session.user.id}/${Date.now()}_${photo.name}`;
-            const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, photo);
-            if (uploadError) throw uploadError;
+    let photoUrl: string | null = null;
 
-            const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
-            photoUrl = data.publicUrl;
+    try {
+        if (photo) {
+            const fileExt = photo.name.split('.').pop();
+            const fileName = `${Date.now()}.${fileExt}`;
+            const filePath = `${session.user.id}/${fileName}`;
+            let { error: uploadError } = await supabase.storage
+                .from('student-photos')
+                .upload(filePath, photo);
+            if (uploadError) throw uploadError;
+            
+            const { data: publicUrlData } = supabase.storage.from('student-photos').getPublicUrl(filePath);
+            photoUrl = publicUrlData.publicUrl;
         }
 
-        const newStudentData: Database['public']['Tables']['students']['Insert'] = { name, points: 75, photo_url: photoUrl || '', user_id: session.user.id };
-        const { data: newStudent, error } = await supabase.from('students').insert(newStudentData).select().single();
-        if (error) throw error;
-        if(newStudent) setStudents([{ ...newStudent, photo_url: newStudent.photo_url || '' }, ...students]);
+        const newStudent: Database['public']['Tables']['students']['Insert'] = { name, photo_url: photoUrl };
+        const { data, error } = await supabase
+            .from('students')
+            .insert(newStudent)
+            .select()
+            .single();
 
-    } catch (error) {
-        console.error('Error adding student:', error);
+        if (error) throw error;
+        if (data) {
+            setStudents([data, ...students]);
+        }
+
+    } catch (error: any) {
+        console.error('Error adding student:', error.message);
+        alert('Gagal menambahkan siswa: ' + error.message);
     } finally {
         setIsAddingStudent(false);
     }
   };
 
+  const handleOpenEditModal = (student: Student) => {
+    setEditingStudent(student);
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateStudent = async (updatedStudent: Student, newPhoto: File | null) => {
+      if (!session) return;
+      setIsUpdatingStudent(true);
+      
+      let studentToUpdate = { ...updatedStudent };
+
+      try {
+          if (newPhoto) {
+              const fileExt = newPhoto.name.split('.').pop();
+              const fileName = `${Date.now()}.${fileExt}`;
+              const filePath = `${session.user.id}/${fileName}`;
+              
+              const { error: uploadError } = await supabase.storage
+                  .from('student-photos')
+                  .upload(filePath, newPhoto, { upsert: true });
+              if (uploadError) throw uploadError;
+              
+              const { data: publicUrlData } = supabase.storage.from('student-photos').getPublicUrl(filePath);
+              studentToUpdate.photo_url = publicUrlData.publicUrl;
+          }
+
+          const studentUpdate: Database['public']['Tables']['students']['Update'] = { name: studentToUpdate.name, photo_url: studentToUpdate.photo_url };
+          const { data, error } = await supabase
+              .from('students')
+              .update(studentUpdate)
+              .eq('id', studentToUpdate.id)
+              .select()
+              .single();
+
+          if (error) throw error;
+          
+          if(data) {
+            setStudents(students.map(s => s.id === data.id ? data : s));
+            setIsEditModalOpen(false);
+            setEditingStudent(null);
+          }
+      } catch (error: any) {
+          console.error('Error updating student:', error);
+          alert('Gagal memperbarui siswa: ' + error.message);
+      } finally {
+          setIsUpdatingStudent(false);
+      }
+  };
+
+  const handleDeleteStudent = async (studentId: string) => {
+    if (!window.confirm('Apakah Anda yakin ingin menghapus siswa ini? Tindakan ini tidak dapat diurungkan.')) return;
+    
+    try {
+        const studentToDelete = students.find(s => s.id === studentId);
+        if (studentToDelete?.photo_url) {
+            const path = new URL(studentToDelete.photo_url).pathname.split('/student-photos/')[1];
+            await supabase.storage.from('student-photos').remove([path]);
+        }
+        
+        const { error } = await supabase.from('students').delete().eq('id', studentId);
+        if (error) throw error;
+        
+        setStudents(students.filter(s => s.id !== studentId));
+    } catch (error: any) {
+        console.error('Error deleting student:', error);
+        alert('Gagal menghapus siswa: ' + error.message);
+    }
+  };
+
+  // Points handlers
   const handleOpenModal = (student: Student, type: ModalType) => {
     setSelectedStudent(student);
     setModalType(type);
@@ -184,405 +285,253 @@ const App: React.FC = () => {
     setSelectedStudent(null);
     setModalType(null);
   };
+
+  const handlePointSubmit = async (points: number, reason: string) => {
+    if (!selectedStudent || !session) return;
+
+    const pointChange = modalType === 'subtract' ? -Math.abs(points) : Math.abs(points);
+    const newTotal = selectedStudent.points + pointChange;
+    
+    const studentUpdate: Database['public']['Tables']['students']['Update'] = { points: newTotal };
+    const { data: updatedStudent, error: updateError } = await supabase
+      .from('students')
+      .update(studentUpdate)
+      .eq('id', selectedStudent.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Error updating points:', updateError);
+      return;
+    }
+
+    if (updatedStudent) {
+      const newTransaction: Database['public']['Tables']['point_transactions']['Insert'] = { student_id: selectedStudent.id, points: pointChange, reason, user_id: session.user.id };
+      const { error: txError } = await supabase
+        .from('point_transactions')
+        .insert(newTransaction);
+        
+      if (txError) {
+        console.error('Error logging transaction:', txError);
+      }
+
+      setStudents(students.map(s => (s.id === selectedStudent.id ? updatedStudent : s)));
+      handleCloseModal();
+    }
+  };
+
+  // Group points handlers
+  const handleToggleSelection = (id: string) => {
+    const newSelection = new Set(selectedStudentIds);
+    if (newSelection.has(id)) {
+      newSelection.delete(id);
+    } else {
+      newSelection.add(id);
+    }
+    setSelectedStudentIds(newSelection);
+  };
+
+  const handleGroupPointSubmit = async (points: number, reason: string, type: 'add' | 'subtract') => {
+      if (selectedStudentIds.size === 0 || !session) return;
+      setIsSubmittingGroupPoints(true);
+      const pointChange = type === 'subtract' ? -Math.abs(points) : Math.abs(points);
+
+      const updates = Array.from(selectedStudentIds).map(id => {
+          const student = students.find(s => s.id === id);
+          if (!student) return null;
+          const studentUpdate: Database['public']['Tables']['students']['Update'] = { points: student.points + pointChange };
+          return supabase
+              .from('students')
+              .update(studentUpdate)
+              .eq('id', id)
+      }).filter(Boolean);
+
+      const transactions: Database['public']['Tables']['point_transactions']['Insert'][] = Array.from(selectedStudentIds).map(id => ({
+          student_id: id,
+          points: pointChange,
+          reason: `${reason} (Grup)`,
+          user_id: session.user.id
+      }));
+
+      try {
+          await Promise.all(updates);
+          await supabase.from('point_transactions').insert(transactions);
+          
+          // Refetch all students to ensure data consistency
+          const { data, error } = await supabase.from('students').select('*');
+          if (error) throw error;
+          setStudents(data || []);
+
+      } catch (error) {
+          console.error("Error updating group points:", error);
+      } finally {
+          setIsSubmittingGroupPoints(false);
+          setIsGroupModalOpen(false);
+          setSelectedStudentIds(new Set());
+      }
+  };
   
-  const handleCloseGroupModal = () => setIsGroupModalOpen(false);
-
-  const handleSubmitPoints = async (points: number, reason: string) => {
-    if (!selectedStudent || !modalType || !session) return;
-
-    const pointsToApply = modalType === 'add' ? points : -points;
-    const newTotalPoints = Math.max(0, selectedStudent.points + pointsToApply);
-
-    try {
-        const { error: txError } = await supabase.from('point_transactions').insert({ student_id: selectedStudent.id, points: pointsToApply, reason, user_id: session.user.id });
-        if (txError) throw txError;
-
-        const { error: studentError } = await supabase.from('students').update({ points: newTotalPoints }).eq('id', selectedStudent.id);
-        if (studentError) throw studentError;
-        
-        setStudents(students.map(s => s.id === selectedStudent.id ? { ...s, points: newTotalPoints } : s));
-        handleCloseModal();
-
-    } catch(error) {
-        console.error('Error submitting points:', error);
-    }
+  // Profile update handler
+  const handleProfileUpdate = (updatedProfile: Profile) => {
+      setProfile(updatedProfile);
+      updateAppAppearance(updatedProfile);
   };
 
-  const handleSubmitGroupPoints = async (points: number, reason: string, type: 'add' | 'subtract') => {
-    if(!session) return;
-    setIsSubmittingGroupPoints(true);
-    const pointsToApply = type === 'add' ? points : -points;
-    const selectedStudentsList = students.filter(s => selectedStudentIds.has(s.id));
-
-    if (selectedStudentsList.length === 0) {
-        setIsSubmittingGroupPoints(false);
-        return;
-    }
-
-    try {
-        const transactions = selectedStudentsList.map(student => ({ student_id: student.id, points: pointsToApply, reason, user_id: session.user.id }));
-        const { error: txError } = await supabase.from('point_transactions').insert(transactions);
-        if (txError) throw txError;
-
-        const updatedStudents = selectedStudentsList.map(student => ({ ...student, points: Math.max(0, student.points + pointsToApply) }));
-        const updatePromises = updatedStudents.map(student => supabase.from('students').update({ points: student.points }).eq('id', student.id));
-        
-        await Promise.all(updatePromises);
-
-        setStudents(currentStudents => {
-            const updatedStudentMap = new Map(updatedStudents.map(s => [s.id, s]));
-            return currentStudents.map(s => updatedStudentMap.get(s.id) || s);
-        });
-        
-        handleCloseGroupModal();
-        handleClearSelection();
-    } catch (error) {
-        console.error("Error submitting group points:", error);
-    } finally {
-        setIsSubmittingGroupPoints(false);
-    }
-  };
-
-  const handleAddRule = async (newRuleData: Omit<Rule, 'id' | 'created_at' | 'user_id'>) => {
-    if(!session) return;
-    try {
-        const { data: newRule, error } = await supabase.from('rules').insert({...newRuleData, user_id: session.user.id}).select().single();
-        if (error) throw error;
-        if (newRule) setRules([...rules, newRule]);
-    } catch (error) {
-        console.error('Error adding rule:', error);
-    }
-  };
-
-  const handleUpdateRule = async (updatedRule: Rule) => {
-    try {
-        const { error } = await supabase.from('rules').update({ description: updatedRule.description, points: updatedRule.points, type: updatedRule.type }).eq('id', updatedRule.id);
-        if (error) throw error;
-        setRules(rules.map(rule => rule.id === updatedRule.id ? updatedRule : rule));
-    } catch (error) {
-        console.error('Error updating rule:', error);
-    }
-  };
+  const sortedStudents = useMemo(() => {
+    return [...students].sort((a, b) => {
+      switch (sortBy) {
+        case 'points-desc': return b.points - a.points;
+        case 'points-asc': return a.points - b.points;
+        case 'name-asc': return a.name.localeCompare(b.name);
+        case 'name-desc': return b.name.localeCompare(a.name);
+        default: return 0;
+      }
+    });
+  }, [students, sortBy]);
   
-  const handleDeleteRule = async (ruleId: string) => {
-     try {
-        const { error } = await supabase.from('rules').delete().eq('id', ruleId);
-        if (error) throw error;
-        setRules(rules.filter(rule => rule.id !== ruleId));
-    } catch (error) {
-        console.error('Error deleting rule:', error);
-    }
-  };
+  const filteredStudents = useMemo(() => {
+    return sortedStudents.filter(student =>
+      student.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [sortedStudents, searchTerm]);
   
   const handleLogout = async () => {
     await supabase.auth.signOut();
-  };
-  
-  const AuthPage = () => (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md mx-auto p-8 bg-white rounded-xl shadow-lg">
-            <div className="flex justify-center mb-6">
-                <TrophyIcon className="h-12 w-12 text-blue-600"/>
-            </div>
-            <h2 className="text-center text-2xl font-bold text-gray-800 mb-2">Sistem Poin Siswa</h2>
-            <p className="text-center text-gray-500 mb-8">Masuk atau daftar untuk melanjutkan</p>
-            <Auth
-                supabaseClient={supabase}
-                appearance={{ theme: ThemeSupa }}
-                providers={['google']}
-                socialLayout="horizontal"
-                theme="light"
-            />
-        </div>
-    </div>
-  );
-
-  const SettingsPage = () => {
-    const [appName, setAppName] = useState(profile?.app_name || '');
-    const [logoFile, setLogoFile] = useState<File | null>(null);
-    const [faviconFile, setFaviconFile] = useState<File | null>(null);
-    const [isSaving, setIsSaving] = useState(false);
-    
-    if (!session) return null;
-
-    const handleSave = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSaving(true);
-        try {
-            let logoUrl = profile?.logo_url;
-            let faviconUrl = profile?.favicon_url;
-
-            if (logoFile) {
-                const logoPath = `${session.user.id}/logo_${Date.now()}`;
-                const { error: uploadError } = await supabase.storage.from('branding').upload(logoPath, logoFile);
-                if (uploadError) throw uploadError;
-                logoUrl = supabase.storage.from('branding').getPublicUrl(logoPath).data.publicUrl;
-            }
-            if (faviconFile) {
-                const faviconPath = `${session.user.id}/favicon_${Date.now()}`;
-                const { error: uploadError } = await supabase.storage.from('branding').upload(faviconPath, faviconFile);
-                if (uploadError) throw uploadError;
-                faviconUrl = supabase.storage.from('branding').getPublicUrl(faviconPath).data.publicUrl;
-            }
-
-            const updatedProfile: Database['public']['Tables']['profiles']['Insert'] = { id: session.user.id, app_name: appName, logo_url: logoUrl || '', favicon_url: faviconUrl || '' };
-            const { data, error } = await supabase.from('profiles').upsert(updatedProfile).select().single();
-            if (error) throw error;
-            
-            const profileData = data ? {
-                ...data,
-                app_name: data.app_name || '',
-                logo_url: data.logo_url || '',
-                favicon_url: data.favicon_url || '',
-            } : null;
-
-            setProfile(profileData);
-            alert('Pengaturan berhasil disimpan!');
-
-        } catch (error: any) {
-            alert('Gagal menyimpan pengaturan: ' + error.message);
-        } finally {
-            setIsSaving(false);
-        }
-    };
-    
-    return (
-        <div className="bg-white p-6 rounded-lg shadow-md">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6">Pengaturan Aplikasi</h2>
-            <form onSubmit={handleSave} className="space-y-6">
-                 <div>
-                    <label htmlFor="appName" className="block text-sm font-medium text-gray-700">Nama Aplikasi</label>
-                    <input type="text" id="appName" value={appName} onChange={e => setAppName(e.target.value)} className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"/>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Logo Aplikasi</label>
-                        <div className="mt-1 flex items-center space-x-4">
-                            {profile?.logo_url && <img src={profile.logo_url} className="h-16 w-16 rounded-md object-cover" />}
-                            <input type="file" onChange={e => setLogoFile(e.target.files?.[0] || null)} accept="image/png, image/jpeg" className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
-                        </div>
-                    </div>
-                     <div>
-                        <label className="block text-sm font-medium text-gray-700">Favicon</label>
-                         <div className="mt-1 flex items-center space-x-4">
-                            {profile?.favicon_url && <img src={profile.favicon_url} className="h-16 w-16 rounded-md object-cover" />}
-                            <input type="file" onChange={e => setFaviconFile(e.target.files?.[0] || null)} accept="image/png, image/jpeg, image/x-icon" className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
-                        </div>
-                    </div>
-                </div>
-                <div className="text-right">
-                    <button type="submit" disabled={isSaving} className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400">
-                        {isSaving ? 'Menyimpan...' : 'Simpan Pengaturan'}
-                    </button>
-                </div>
-            </form>
-        </div>
-    );
-  };
-  
-  const DataManagementPage = () => {
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const [importType, setImportType] = useState<'students' | 'rules' | null>(null);
-
-    const handleExport = (type: 'students' | 'rules') => {
-        const data = type === 'students' ? students : rules;
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${type}_export_${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
-    
-    const triggerImport = (type: 'students' | 'rules') => {
-        setImportType(type);
-        fileInputRef.current?.click();
-    };
-
-    const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        if (!session || !importType) return;
-        const file = event.target.files?.[0];
-        if (!file) return;
-
-        const text = await file.text();
-        try {
-            const data = JSON.parse(text);
-            if (!Array.isArray(data)) throw new Error("File JSON harus berisi array.");
-
-            const dataWithUser = data.map(item => ({ ...item, user_id: session.user.id, id: undefined, created_at: undefined }));
-            
-            if (importType === 'students') {
-                type StudentInsert = Database['public']['Tables']['students']['Insert'];
-                const { error } = await supabase.from('students').upsert(dataWithUser as StudentInsert[], { onConflict: 'name,user_id' });
-                if (error) throw error;
-            } else if (importType === 'rules') {
-                type RuleInsert = Database['public']['Tables']['rules']['Insert'];
-                const { error } = await supabase.from('rules').upsert(dataWithUser as RuleInsert[], { onConflict: 'description,user_id' });
-                if (error) throw error;
-            }
-            
-            alert(`Data ${importType} berhasil diimpor!`);
-            // Refresh data
-             if (importType === 'students') {
-                const { data } = await supabase.from('students').select('*').eq('user_id', session.user.id);
-                setStudents((data || []).map(s => ({...s, photo_url: s.photo_url || ''})));
-            } else {
-                const { data } = await supabase.from('rules').select('*').eq('user_id', session.user.id);
-                setRules(data || []);
-            }
-        } catch (error: any) {
-             alert(`Gagal mengimpor data: ${error.message}`);
-        } finally {
-            if(fileInputRef.current) fileInputRef.current.value = ''; // Reset file input
-        }
-    };
-    
-    return (
-        <div className="bg-white p-6 rounded-lg shadow-md space-y-8">
-            <div>
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">Ekspor Data</h2>
-                <p className="text-gray-600 mb-4">Unduh data Anda sebagai file JSON untuk cadangan atau penggunaan eksternal.</p>
-                <div className="flex flex-col sm:flex-row gap-4">
-                    <button onClick={() => handleExport('students')} className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-green-600 hover:bg-green-700"><DownloadIcon className="h-5 w-5 mr-2" /> Ekspor Data Siswa</button>
-                    <button onClick={() => handleExport('rules')} className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-green-600 hover:bg-green-700"><DownloadIcon className="h-5 w-5 mr-2" /> Ekspor Data Peraturan</button>
-                </div>
-            </div>
-             <div>
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">Impor Data</h2>
-                <p className="text-gray-600 mb-4">Impor data dari file JSON. Catatan yang ada akan diperbarui jika ada nama yang cocok.</p>
-                <div className="flex flex-col sm:flex-row gap-4">
-                     <button onClick={() => triggerImport('students')} className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700"><UploadCloudIcon className="h-5 w-5 mr-2" /> Impor Data Siswa</button>
-                    <button onClick={() => triggerImport('rules')} className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700"><UploadCloudIcon className="h-5 w-5 mr-2" /> Impor Data Peraturan</button>
-                    <input type="file" ref={fileInputRef} onChange={handleImport} accept=".json" className="hidden" />
-                </div>
-            </div>
-        </div>
-    );
-  };
-  
-  if (isLoading) {
-    return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-            <div className="w-12 h-12 border-4 border-blue-600 border-dashed rounded-full animate-spin"></div>
-        </div>
-    );
   }
-
+  
   if (!session) {
-    return <AuthPage />;
-  }
-
-  if (fetchError) {
-      return (
-        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-          <div className="max-w-3xl w-full mx-auto p-8 bg-white shadow-2xl rounded-xl border border-gray-200">
-            <div className="flex flex-col sm:flex-row items-center text-center sm:text-left mb-6 gap-4 sm:gap-0">
-              <ExclamationIcon className="h-10 w-10 text-red-500 mr-4 flex-shrink-0" />
-              <div>
-                <h2 className="text-2xl font-extrabold text-gray-900">Koneksi Database Gagal</h2>
-                <p className="text-gray-600">Aplikasi tidak dapat mengambil data Anda. Ini mungkin karena masalah konfigurasi.</p>
-              </div>
+    return (
+        <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+            <div className="max-w-md w-full bg-white p-8 rounded-lg shadow-lg">
+                <div className="flex justify-center mb-6">
+                    <TrophyIcon className="h-12 w-12 text-blue-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-center text-gray-800 mb-4">Sistem E-Poin Siswa</h2>
+                <Auth 
+                    supabaseClient={supabase} 
+                    appearance={{ theme: ThemeSupa }} 
+                    providers={['google']}
+                    theme="light"
+                />
             </div>
-            <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-md mb-6">
-              <p className="font-semibold text-red-800">Penyebab Umum: Keamanan Tingkat Baris (RLS) tidak aktif</p>
-              <p className="text-red-700 text-sm mt-1">Aplikasi ini memerlukan autentikasi. Anda perlu mengaktifkan RLS dan membuat "Policies" di Supabase untuk mengizinkan pengguna yang masuk mengakses data mereka sendiri.</p>
-            </div>
-            {supabaseProjectRef && (<div className="text-center mb-6 mt-8">
-                <a href={`https://app.supabase.com/project/${supabaseProjectRef}/auth/policies`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700">
-                    <ExternalLinkIcon className="h-5 w-5 mr-2" /> Buka Pengaturan Supabase Policies
-                </a>
-            </div>)}
-            <details className="bg-gray-50 rounded-lg p-3 mt-8">
-              <summary className="font-medium text-sm text-gray-600 cursor-pointer hover:text-gray-900">Lihat Detail Error Teknis</summary>
-              <div className="mt-2 bg-gray-900 text-white p-4 rounded-md text-left text-xs font-mono whitespace-pre-wrap overflow-x-auto"><code>{fetchError}</code></div>
-            </details>
-          </div>
         </div>
-      );
+    );
   }
 
+  const renderContent = () => {
+      if (isLoading) {
+        return <div className="text-center py-10">Memuat data...</div>;
+      }
+      if (fetchError) {
+        return <div className="text-center py-10 text-red-500">{fetchError}</div>;
+      }
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Header currentView={currentView} onNavigate={setCurrentView} onLogout={handleLogout} profile={profile} />
-      
-      {currentView === 'students' && selectedStudentIds.size > 0 && (
-          <div className="sticky top-[84px] sm:top-[68px] z-10 bg-blue-50 py-3 px-4 sm:px-6 lg:px-8 shadow-md border-b border-blue-200">
-              <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-blue-800 text-center sm:text-left">{selectedStudentIds.size} siswa terpilih</p>
-                  <div className="flex items-center gap-2">
-                      <button onClick={handleSelectAll} className="text-sm font-medium text-blue-600 hover:text-blue-800">Pilih Semua</button>
-                      <span className="text-gray-300">|</span>
-                      <button onClick={handleClearSelection} className="text-sm font-medium text-blue-600 hover:text-blue-800">Batalkan</button>
-                      <button 
-                        onClick={() => setIsGroupModalOpen(true)}
-                        className="ml-4 inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700">
-                        <PlusIcon className="h-5 w-5 mr-2" />
-                        Ubah Poin Grup
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          {currentView === 'students' ? (
+      switch(currentView) {
+        case 'students':
+          return (
             <>
-              <AddStudentForm onAddStudent={handleAddStudent} isAdding={isAddingStudent}/>
-              <div className="bg-white p-4 rounded-lg shadow-md mb-6 flex flex-col sm:flex-row gap-4">
-                <input type="text" placeholder="Cari nama siswa..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"/>
-                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortByType)} className="w-full sm:w-64 px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white" aria-label="Urutkan Siswa">
-                    <option value="points-desc">Urutkan: Poin Tertinggi</option>
-                    <option value="points-asc">Urutkan: Poin Terendah</option>
-                    <option value="name-asc">Urutkan: Nama A-Z</option>
-                    <option value="name-desc">Urutkan: Nama Z-A</option>
-                </select>
+              {profile?.role === 'admin' && (
+                  <AddStudentForm onAddStudent={handleAddStudent} isAdding={isAddingStudent} />
+              )}
+              <div className="bg-white p-4 rounded-lg shadow-md mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <input
+                    type="text"
+                    placeholder="Cari nama siswa..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as SortByType)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="points-desc">Poin Tertinggi</option>
+                    <option value="points-asc">Poin Terendah</option>
+                    <option value="name-asc">Nama (A-Z)</option>
+                    <option value="name-desc">Nama (Z-A)</option>
+                  </select>
+                </div>
+                {selectedStudentIds.size > 0 && (
+                    <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-2 p-3 bg-blue-50 rounded-lg">
+                        <p className="text-sm font-medium text-blue-800">{selectedStudentIds.size} siswa terpilih.</p>
+                        <div>
+                             <button onClick={() => setIsGroupModalOpen(true)} className="px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700">Ubah Poin Grup</button>
+                             <button onClick={() => setSelectedStudentIds(new Set())} className="ml-2 px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">Batalkan Pilihan</button>
+                        </div>
+                    </div>
+                )}
               </div>
               {filteredStudents.length > 0 ? (
-                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                    {filteredStudents.map(student => (
-                        <StudentCard 
-                            key={student.id} 
-                            student={student} 
-                            onOpenModal={handleOpenModal} 
-                            isSelected={selectedStudentIds.has(student.id)}
-                            onToggleSelection={handleToggleSelection}
-                        />
-                    ))}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {filteredStudents.map(student => (
+                    <StudentCard 
+                        key={student.id} 
+                        student={student} 
+                        onOpenModal={handleOpenModal}
+                        isSelected={selectedStudentIds.has(student.id)}
+                        onToggleSelection={handleToggleSelection}
+                        userRole={profile?.role}
+                        onEdit={handleOpenEditModal}
+                        onDelete={handleDeleteStudent}
+                    />
+                  ))}
                 </div>
-                ) : (
-                    <div className="text-center py-16 px-4 bg-white rounded-lg shadow-md">
-                        <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-                        <h3 className="mt-2 text-sm font-medium text-gray-900">Tidak Ada Siswa</h3>
-                        <p className="mt-1 text-sm text-gray-500">{searchTerm ? 'Tidak ada siswa yang cocok dengan pencarian Anda.' : 'Mulai dengan menambahkan siswa baru di atas.'}</p>
-                    </div>
-                )
-              }
+              ) : (
+                <div className="text-center py-10 bg-white rounded-lg shadow-md">
+                  <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
+                  <h3 className="mt-2 text-sm font-medium text-gray-900">Tidak ada siswa</h3>
+                  <p className="mt-1 text-sm text-gray-500">{searchTerm ? "Tidak ada siswa yang cocok dengan pencarian Anda." : "Mulai dengan menambahkan siswa baru."}</p>
+                </div>
+              )}
             </>
-          ) : currentView === 'rules' ? (
-            <RuleManagement rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule}/>
-          ) : currentView === 'settings' ? (
-            <SettingsPage />
-          ) : (
-            <DataManagementPage />
-          )}
-        </div>
+          );
+        case 'rules':
+            return <RuleManagement rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule} />;
+        case 'settings':
+            return <SettingsView profile={profile} onProfileUpdate={handleProfileUpdate} />;
+        case 'data':
+            return <DataManagementView students={students} rules={rules} />;
+        default:
+          return null;
+      }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <Header 
+        currentView={currentView} 
+        onNavigate={setCurrentView}
+        onLogout={handleLogout}
+        profile={profile}
+      />
+      <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        {renderContent()}
       </main>
-      {selectedStudent && (
-        <PointModal isOpen={isModalOpen} onClose={handleCloseModal} onSubmit={handleSubmitPoints} student={selectedStudent} modalType={modalType} rules={rules}/>
-       )}
-       <GroupPointModal 
-            isOpen={isGroupModalOpen}
-            onClose={handleCloseGroupModal}
-            onSubmit={handleSubmitGroupPoints}
-            selectedCount={selectedStudentIds.size}
-            rules={rules}
-            isSubmitting={isSubmittingGroupPoints}
-       />
+      <PointModal
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        onSubmit={handlePointSubmit}
+        student={selectedStudent}
+        modalType={modalType}
+        rules={rules}
+      />
+      <GroupPointModal
+        isOpen={isGroupModalOpen}
+        onClose={() => setIsGroupModalOpen(false)}
+        onSubmit={handleGroupPointSubmit}
+        selectedCount={selectedStudentIds.size}
+        rules={rules}
+        isSubmitting={isSubmittingGroupPoints}
+      />
+      <StudentEditModal
+        isOpen={isEditModalOpen}
+        onClose={() => { setIsEditModalOpen(false); setEditingStudent(null); }}
+        onUpdate={handleUpdateStudent}
+        student={editingStudent}
+        isUpdating={isUpdatingStudent}
+      />
     </div>
   );
 };

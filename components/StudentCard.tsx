@@ -1,13 +1,16 @@
 
 import React from 'react';
 import { Student } from '../types';
-import { PlusIcon, MinusIcon, HistoryIcon, UserGroupIcon, CheckIcon } from './icons';
+import { PlusIcon, MinusIcon, HistoryIcon, UserGroupIcon, CheckIcon, PencilIcon, TrashIcon } from './icons';
 
 interface StudentCardProps {
   student: Student;
   onOpenModal: (student: Student, type: 'add' | 'subtract' | 'history') => void;
   isSelected: boolean;
   onToggleSelection: (id: string) => void;
+  userRole?: 'admin' | 'teacher';
+  onEdit: (student: Student) => void;
+  onDelete: (studentId: string) => void;
 }
 
 const getPointColor = (points: number) => {
@@ -17,12 +20,18 @@ const getPointColor = (points: number) => {
   return 'text-gray-800';
 };
 
-const StudentCard: React.FC<StudentCardProps> = ({ student, onOpenModal, isSelected, onToggleSelection }) => {
+const StudentCard: React.FC<StudentCardProps> = ({ student, onOpenModal, isSelected, onToggleSelection, userRole, onEdit, onDelete }) => {
   const pointColor = getPointColor(student.points);
   
-  const handleButtonClick = (e: React.MouseEvent, type: 'add' | 'subtract' | 'history') => {
+  const handleButtonClick = (e: React.MouseEvent, type: 'add' | 'subtract' | 'history' | 'edit' | 'delete') => {
     e.stopPropagation();
-    onOpenModal(student, type);
+    if (type === 'edit') {
+        onEdit(student);
+    } else if (type === 'delete') {
+        onDelete(student.id);
+    } else {
+        onOpenModal(student, type);
+    }
   };
 
 
@@ -35,6 +44,16 @@ const StudentCard: React.FC<StudentCardProps> = ({ student, onOpenModal, isSelec
         <div className="absolute top-3 right-3 bg-blue-600 rounded-full h-6 w-6 flex items-center justify-center text-white z-10">
           <CheckIcon className="h-4 w-4" />
         </div>
+      )}
+      {userRole === 'admin' && (
+          <div className="absolute top-2 left-2 z-10 flex flex-col gap-1">
+              <button onClick={(e) => handleButtonClick(e, 'edit')} className="p-1.5 bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-600 rounded-full transition-colors duration-200">
+                  <PencilIcon className="h-4 w-4" />
+              </button>
+              <button onClick={(e) => handleButtonClick(e, 'delete')} className="p-1.5 bg-gray-100 text-gray-600 hover:bg-red-100 hover:text-red-600 rounded-full transition-colors duration-200">
+                  <TrashIcon className="h-4 w-4" />
+              </button>
+          </div>
       )}
       <div className="p-6">
         <div className="flex items-center space-x-4">

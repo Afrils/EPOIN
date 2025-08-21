@@ -7,25 +7,22 @@ export type Database = {
           id: string;
           created_at: string;
           name: string;
-          photo_url: string;
+          photo_url: string | null;
           points: number;
-          user_id: string;
         };
         Insert: {
           id?: string;
           created_at?: string;
           name: string;
-          photo_url?: string;
+          photo_url?: string | null;
           points?: number;
-          user_id: string;
         };
         Update: {
           id?: string;
           created_at?: string;
           name?: string;
-          photo_url?: string;
+          photo_url?: string | null;
           points?: number;
-          user_id?: string;
         };
         Relationships: [];
       };
@@ -87,20 +84,23 @@ export type Database = {
         Row: {
           id: string;
           app_name: string;
-          logo_url: string;
-          favicon_url: string;
+          logo_url: string | null;
+          favicon_url: string | null;
+          role: 'admin' | 'teacher';
         };
         Insert: {
           id: string;
           app_name?: string;
-          logo_url?: string;
-          favicon_url?: string;
+          logo_url?: string | null;
+          favicon_url?: string | null;
+          role?: 'admin' | 'teacher';
         };
         Update: {
           id?: string;
           app_name?: string;
-          logo_url?: string;
-          favicon_url?: string;
+          logo_url?: string | null;
+          favicon_url?: string | null;
+          role?: 'admin' | 'teacher';
         };
         Relationships: [];
       };
