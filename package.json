@@ -1,5 +1,5 @@
 {
-  "name": "sistem-poin-siswa",
+  "name": "sistem-e-poin-siswa",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -13,7 +13,7 @@
     "react": "^18.2.0",
     "@supabase/supabase-js": "2",
     "@supabase/auth-ui-react": "0.4.7",
-    "@supabase/auth-ui-shared-themes": "1.0.2"
+    "@supabase/auth-ui-shared": "^0.1.8"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

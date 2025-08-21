@@ -10,7 +10,7 @@ import RuleManagement from './components/RuleManagement';
 import { supabase, supabaseProjectRef } from './supabase/client';
 import GroupPointModal from './components/GroupPointModal';
 import { Auth } from '@supabase/auth-ui-react';
-import { ThemeSupa } from '@supabase/auth-ui-shared-themes';
+import { ThemeSupa } from '@supabase/auth-ui-shared';
 import type { Session } from '@supabase/supabase-js';
 
 

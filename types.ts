@@ -27,6 +27,7 @@ export type Database = {
           points?: number;
           user_id?: string;
         };
+        Relationships: [];
       };
       rules: {
         Row: {
@@ -53,6 +54,7 @@ export type Database = {
           type?: 'achievement' | 'violation';
           user_id?: string;
         };
+        Relationships: [];
       };
       point_transactions: {
         Row: {
@@ -79,6 +81,7 @@ export type Database = {
           reason?: string;
           user_id?: string;
         };
+        Relationships: [];
       };
       profiles: {
         Row: {
@@ -99,6 +102,7 @@ export type Database = {
           logo_url?: string;
           favicon_url?: string;
         };
+        Relationships: [];
       };
     };
     Views: {};
