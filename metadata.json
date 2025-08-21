@@ -1,0 +1,5 @@
+{
+  "name": "Sistem Poin Siswa",
+  "description": "Aplikasi web untuk mencatat, menambah, mengurangi, dan memantau poin pelanggaran dan prestasi siswa di sekolah.",
+  "requestFramePermissions": []
+}
