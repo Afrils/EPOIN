@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import { Student, Rule, PointTransaction } from '../types';
 import { supabase, supabaseProjectRef } from '../supabase/client';

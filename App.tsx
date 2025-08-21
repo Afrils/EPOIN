@@ -1,4 +1,5 @@
 
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Student, ModalType, Rule, ViewType, Profile, Database } from './types';
 import Header from './components/Header';
@@ -70,39 +71,63 @@ const App: React.FC = () => {
         setIsLoading(true);
         setFetchError(null);
         try {
-            const [studentsResponse, rulesResponse, profileResponse] = await Promise.all([
+            // Fetch core data first. If these fail, we can't proceed.
+            const [studentsResponse, rulesResponse] = await Promise.all([
                 supabase.from('students').select('*'),
                 supabase.from('rules').select('*'),
-                supabase.from('profiles').select('*').eq('id', session.user.id).single()
             ]);
 
             if (studentsResponse.error) throw studentsResponse.error;
-            if (rulesResponse.error) throw rulesResponse.error;
+            setStudents(studentsResponse.data || []);
             
-            let userProfile = profileResponse.data;
+            if (rulesResponse.error) throw rulesResponse.error;
+            setRules(rulesResponse.data || []);
+            
+            // Attempt to fetch profile, but gracefully handle its absence.
+            let userProfile: Profile | null = null;
+            const profileResponse = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
 
-            if (profileResponse.error && profileResponse.error.code === 'PGRST116') {
-                 const newProfileData: Database['public']['Tables']['profiles']['Insert'] = { id: session.user.id, role: 'teacher', app_name: 'Sistem Poin Siswa' };
-                 const { data: newProfile, error: insertError } = await supabase
-                    .from('profiles')
-                    .insert(newProfileData)
-                    .select()
-                    .single();
-                if (insertError) throw insertError;
-                if (newProfile) {
-                  userProfile = newProfile;
+            if (profileResponse.error) {
+                if (profileResponse.error.code === 'PGRST116') {
+                    // No profile row exists, try to create one.
+                    try {
+                        const newProfileData: Database['public']['Tables']['profiles']['Insert'] = { id: session.user.id, role: 'teacher', app_name: 'Sistem Poin Siswa' };
+                        const { data: newProfile, error: insertError } = await supabase
+                            .from('profiles')
+                            .insert(newProfileData)
+                            .select()
+                            .single();
+                        if (insertError) throw insertError; // If this fails, we'll fall back to default.
+                        userProfile = newProfile;
+                    } catch (creationError: any) {
+                        console.warn(`Failed to create profile, possibly because the table is missing. Error: ${creationError.message}`);
+                    }
+                } else {
+                    // A different error occurred, likely the table is missing or an RLS issue.
+                    console.warn(`Could not fetch profile, falling back to default. Error: ${profileResponse.error.message}`);
                 }
-            } else if (profileResponse.error) {
-                throw profileResponse.error;
+            } else {
+                userProfile = profileResponse.data;
             }
 
-            setStudents(studentsResponse.data || []);
-            setRules(rulesResponse.data || []);
+            // If userProfile is still null, it means fetching and creation failed.
+            // We create a default local profile object to allow the app to run in a degraded mode.
+            if (!userProfile) {
+                userProfile = {
+                    id: session.user.id,
+                    app_name: 'Sistem Poin Siswa',
+                    logo_url: null,
+                    favicon_url: null,
+                    role: 'teacher' // Default to 'teacher' role for safety
+                };
+            }
+
             setProfile(userProfile);
             updateAppAppearance(userProfile);
 
         } catch (error: any) {
-            setFetchError(`Gagal memuat data: ${error.message}`);
+            // This will catch critical errors from students/rules fetching.
+            setFetchError(`Gagal memuat data inti: ${error.message}`);
         } finally {
             setIsLoading(false);
         }
